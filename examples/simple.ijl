@@ -1,0 +1,7 @@
+interface Console {
+    log();
+}
+
+define console: Console;
+
+console.log("hello world");

@@ -109,14 +109,14 @@ enum Postfix<C: Carrier> {
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
--> impl Parser<'tokens, I, Statement<Untyped>, extra::Err<Rich<'tokens, Token<'src>>>>
+    -> impl Parser<'tokens, I, Statement<Untyped>, extra::Err<Rich<'tokens, Token<'src>>>>
 where
-    I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
+    I: ValueInput<'tokens, Token=Token<'src>, Span=SimpleSpan>,
 {
     let ident = select! {
         Token::Ident(ident) => ident
     }
-    .labelled("identifier");
+        .labelled("identifier");
 
     recursive(|stmt| {
         let expr = recursive(|expr| {
@@ -169,7 +169,7 @@ where
             let arg_positional = arg_value.clone().map_with(|value, x| ts(CallArgument {
                 name: None,
                 spread: false,
-                value
+                value,
             }, x));
 
             let arg_named = ident.clone()
@@ -184,7 +184,7 @@ where
             let call = just(Token::BracketOpen)
                 .ignore_then(arg.separated_by(just(Token::Comma)).collect::<Vec<_>>())
                 .then_ignore(just(Token::BracketClose));
-            let block_postfix = block.map_with(sp);
+            let block_postfix = block.map_with(ts);
 
             let infix_symbol = one_of(&[
                 Token::Pipe,
@@ -204,18 +204,18 @@ where
                 Token::DollarSign,
                 Token::Underscore,
             ])
-            .repeated()
+                .repeated()
                 .at_least(2)
-            .collect()
-            .map_with(|v: Vec<Token>, x| {
-                use std::fmt::Write;
-                let mut symbol = String::new();
-                for i in v {
-                    write!(symbol, "{i}").unwrap();
-                }
+                .collect()
+                .map_with(|v: Vec<Token>, x| {
+                    use std::fmt::Write;
+                    let mut symbol = String::new();
+                    for i in v {
+                        write!(symbol, "{i}").unwrap();
+                    }
 
-                sp(symbol, x)
-            });
+                    sp(symbol, x)
+                });
 
             let ident_symbol = ident.map_with(|v, x| sp(v.to_string(), x));
             let op = |t| just(t).map_with(ts);
@@ -241,10 +241,31 @@ where
                             arguments: rhs,
                         }), x)
                     }),
+                    postfix(8, block_postfix, |mut lhs: TypedSpan<Untyped, Expression<Untyped>>, rhs: TypedSpan<Untyped, Block<Untyped>>, x| {
+                        let rhs_span = rhs.span;
+                        if let Expression::Call(v) = &mut lhs.inner && v.block.is_none() {
+                            v.block = Some(rhs);
+                        } else {
+                            return ts(Expression::Call(Call {
+                                source: Box::new(lhs),
+                                block: Some(rhs),
+                                arguments: vec![],
+                            }), x)
+                        };
+                        lhs.span = lhs.span.union(rhs_span);
+                        return lhs;
+                    }),
                     prefix(6, op(Token::Minus), |_, rhs, x| {
                         ts(Expression::Unary(Unary::Negate(Box::new(rhs))), x)
                     }),
                     infix(none(2), infix_symbol, |lhs, infix, rhs, x| {
+                        ts(Expression::Infix(Infix {
+                            lhs: Box::new(lhs),
+                            rhs: Box::new(rhs),
+                            infix,
+                        }), x)
+                    }),
+                    infix(none(1), ident_symbol, |lhs, infix, rhs, x| {
                         ts(Expression::Infix(Infix {
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
@@ -283,7 +304,7 @@ mod tests {
 
     #[test]
     fn test_simple() {
-        let x = r#"4.let(left=1)"#;
+        let x = r#"if {} else {}"#;
         let tokens = lexer(x).spanned();
         let mut stream =
             Stream::from_iter(tokens).map((0..x.len()).into(), |(t, s): (_, _)| (t, s));

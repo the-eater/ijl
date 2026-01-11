@@ -22,7 +22,7 @@ impl Carrier for Untyped {
 #[derive(Debug, Clone, Copy)]
 pub struct TypedSpan<C: Carrier, V> {
     resolved_type: C::Type,
-    span: C::Span,
+    pub(crate) span: C::Span,
     pub(crate) inner: V,
 }
 

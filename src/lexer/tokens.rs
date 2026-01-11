@@ -1,19 +1,19 @@
 use logos::{Lexer, Logos, Span};
 
 #[derive(Debug, Clone, Default)]
-pub struct IJlExtras {
-    xml_depth: usize,
+pub(super) struct IJlExtras {
+    pub(super) xml_depth: usize,
 }
 
 #[derive(Debug, Clone, Logos)]
 #[logos(skip r"[ \r\t]+", extras = IJlExtras)]
-pub(super) enum IJlToken {
-    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*", enter_ijl_xml)]
-    XIJ(Vec<(Span, XIJContentToken)>),
-    #[token(r"<>", enter_ijl_xml)]
-    XIJFragment(Vec<(Span, XIJContentToken)>),
+pub(super) enum IJlToken<'src> {
+    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*")]
+    XIJ(&'src str),
+    #[token(r"<>")]
+    XIJFragment,
     #[regex(r"\p{XID_START}\p{XID_CONTINUE}*")]
-    Ident,
+    Ident(&'src str),
     #[token("\n")]
     NewLine,
     #[token("{")]
@@ -32,6 +32,14 @@ pub(super) enum IJlToken {
     Minus,
     #[token("/")]
     Slash,
+    #[token(r"\")]
+    Backslash,
+    #[token("$")]
+    DollarSign,
+    #[token("*")]
+    Asterisk,
+    #[token("%")]
+    Percentage,
     #[token(">")]
     AngleBracketClose,
     #[token("<")]
@@ -50,12 +58,16 @@ pub(super) enum IJlToken {
     EqualSign,
     #[token("_")]
     Underscore,
+    #[token("~")]
+    Tilde,
+    #[token("`")]
+    Backtick,
     #[regex(r"(?i)0[a-f]+")]
-    Hex,
+    Hex(&'src str),
     #[regex(r"[0-9]+(_[0-9]+)*(.[0-9]+(_[0-9]+)*)?")]
-    Number,
+    Number(&'src str),
     #[regex(r#""[^"]*(\\"[^"]*)*""#)]
-    String,
+    String(&'src str),
     #[token(",")]
     Comma,
     #[token("(")]
@@ -82,113 +94,38 @@ pub(super) enum IJlToken {
 
 #[derive(Debug, Clone, Logos)]
 #[logos(skip r"\s+", extras = IJlExtras)]
-pub(super) enum XIJToken {
-    Open,
+pub(super) enum XIJToken<'src> {
     #[token("/>")]
     SelfClose,
     #[token(">")]
     Close,
     #[regex(r"\p{XID_START}\p{XID_CONTINUE}*")]
-    Ident,
+    Ident(&'src str),
     #[token("=")]
     Assign,
     #[token("=>")]
     AssignEvent,
-    #[token("{", enter_ijl)]
-    Expression(Vec<(Span, IJlToken)>),
+    #[token("{")]
+    Expression,
     #[regex(r#""[^"]*(\\"[^"]*)*""#)]
-    String,
+    String(&'src str),
 }
 
 #[derive(Debug, Clone, Logos)]
 #[logos(extras = IJlExtras)]
-pub(super) enum XIJContentToken {
-    Block(Vec<IJlToken>),
-    #[regex(r"<>", enter_xml_fragment)]
+pub(super) enum XIJContentToken<'src> {
+    #[token("{")]
+    Block,
+    #[regex(r"<>")]
     XmlFragment,
-    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*", enter_xml)]
-    Xml(Vec<(Span, XIJToken)>),
-    #[regex(r"</\p{XID_START}\p{XID_CONTINUE}*>", enter_xml_close)]
-    XmlClose,
-    #[token("</>", enter_xml_close)]
+    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*")]
+    Xml(&'src str),
+    #[regex(r"</\p{XID_START}\p{XID_CONTINUE}*>")]
+    XmlClose(&'src str),
+    #[token("</>")]
     XmlFragmentClose,
     #[regex(r"[^{<]+", priority = 1)]
-    Text,
-}
-
-fn enter_ijl<'a, T: Logos<'a, Source = str, Extras = IJlExtras> + Clone>(
-    lexer: &mut Lexer<'a, T>,
-) -> Result<Vec<(Span, IJlToken)>, ()>
-{
-    let mut morphed = lexer.clone().morph::<IJlToken>();
-    let mut evs = vec![(lexer.span(), IJlToken::BlockOpen)];
-    let mut depth = 1;
-    while let Some(ev) = morphed.next().transpose()? {
-        match &ev {
-            IJlToken::BlockClose => {
-                depth -= 1;
-            }
-
-            _ => {}
-        }
-        evs.push((morphed.span(),ev));
-        if depth == 0 {
-            break;
-        }
-    }
-
-    *lexer = morphed.morph();
-    Ok(evs)
-}
-
-fn enter_ijl_xml(lexer: &mut Lexer<IJlToken>) -> Result<Vec<(Span, XIJContentToken)>, ()> {
-    let sp = lexer.span();
-    let depth = lexer.extras.xml_depth;
-    let mut morphed:Lexer<XIJContentToken> = lexer.clone().morph();
-    let mut xml_content = if lexer.slice() == "<>" {
-        morphed.extras.xml_depth += 1;
-        vec![(lexer.span(), XIJContentToken::XmlFragment)]
-    } else {
-        vec![(sp, XIJContentToken::Xml(enter_xml(&mut morphed)?))]
-    };
-    while depth < morphed.extras.xml_depth {
-        let Some(ev) = morphed.next().transpose()? else {
-            break;
-        };
-        xml_content.push((morphed.span(), ev));
-    }
-
-    *lexer = morphed.morph();
-
-    Ok(xml_content)
-}
-
-fn enter_xml_fragment(lexer: &mut Lexer<XIJContentToken>) {
-    lexer.extras.xml_depth += 1;
-}
-
-fn enter_xml_close(lexer: &mut Lexer<XIJContentToken>) {
-    lexer.extras.xml_depth -= 1;
-}
-
-fn enter_xml(lexer: &mut Lexer<XIJContentToken>) -> Result<Vec<(Span, XIJToken)>, ()> {
-    let mut token = lexer.clone().morph::<XIJToken>();
-
-    let mut tokens = vec![(lexer.span(), XIJToken::Open)];
-    while let Some(v) = token.next().transpose()? {
-        let must_break = matches!(v, XIJToken::Close | XIJToken::SelfClose);
-        if matches!(v, XIJToken::Close) {
-            token.extras.xml_depth += 1;
-        }
-        tokens.push((token.span(), v));
-        if must_break {
-            break;
-        }
-    }
-
-    *lexer = token.morph();
-
-    Ok(tokens)
+    Text(&'src str),
 }
 
 #[cfg(test)]

@@ -4,12 +4,12 @@ use crate::lexer::Token;
 use crate::parser::utils::{Spanned, sp, ts};
 use chumsky::extra::ParserExtra;
 use chumsky::input::ValueInput;
+use chumsky::pratt::{infix, none, postfix, prefix};
 use chumsky::prelude::*;
 use chumsky::primitive::select;
 use chumsky::span::SimpleSpan;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use chumsky::pratt::{infix, none, postfix, prefix};
 use utils::{Carrier, TypedSpan, Untyped};
 
 #[derive(Debug, Clone)]
@@ -43,7 +43,7 @@ pub enum Expression<C: Carrier> {
 
 #[derive(Debug, Clone)]
 pub enum Unary<C: Carrier> {
-    Negate(Box<TypedSpan<C, Expression<C>>>)
+    Negate(Box<TypedSpan<C, Expression<C>>>),
 }
 
 #[derive(Debug, Clone)]
@@ -62,9 +62,15 @@ pub struct Call<C: Carrier> {
 
 #[derive(Debug, Clone)]
 pub struct CallArgument<C: Carrier> {
-    name: Option<Spanned<C, String>>,
+    r#type: CallArgumentType<C>,
     value: CallArgumentValue<C>,
-    spread: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum CallArgumentType<C: Carrier> {
+    Named(Spanned<C, String>),
+    Spread(C::Span),
+    Positional,
 }
 
 #[derive(Debug, Clone)]
@@ -109,14 +115,14 @@ enum Postfix<C: Carrier> {
 }
 
 fn parser<'tokens, 'src: 'tokens, I>()
-    -> impl Parser<'tokens, I, Statement<Untyped>, extra::Err<Rich<'tokens, Token<'src>>>>
+-> impl Parser<'tokens, I, Statement<Untyped>, extra::Err<Rich<'tokens, Token<'src>>>>
 where
-    I: ValueInput<'tokens, Token=Token<'src>, Span=SimpleSpan>,
+    I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
 {
     let ident = select! {
         Token::Ident(ident) => ident
     }
-        .labelled("identifier");
+    .labelled("identifier");
 
     recursive(|stmt| {
         let expr = recursive(|expr| {
@@ -155,29 +161,53 @@ where
 
             let literal = string.or(number).or(hex).map(Expression::Literal);
 
-            let access = embedded_expr.or(block_expr).or(variable).or(literal).map_with(ts);
+            let access = embedded_expr
+                .or(block_expr)
+                .or(variable)
+                .or(literal)
+                .map_with(ts);
 
             let array_access = just(Token::ArrayOpen)
-                .ignore_then(expr.clone().map(Box::new).separated_by(just(Token::Comma)).collect::<Vec<_>>())
+                .ignore_then(
+                    expr.clone()
+                        .map(Box::new)
+                        .separated_by(just(Token::Comma))
+                        .collect::<Vec<_>>(),
+                )
                 .then_ignore(just(Token::ArrayClose));
             let property = just(Token::Dot)
                 .ignore_then(ident)
                 .map_with(|v, x| sp(v.to_string(), x));
 
-            let arg_value = expr.clone().map(CallArgumentValue::Value).or(just(Token::DollarSign).map(|_| CallArgumentValue::Template));
+            let arg_value = expr
+                .clone()
+                .map(CallArgumentValue::Value)
+                .or(just(Token::DollarSign).map(|_| CallArgumentValue::Template));
 
-            let arg_positional = arg_value.clone().map_with(|value, x| ts(CallArgument {
-                name: None,
-                spread: false,
-                value,
-            }, x));
+            let arg_positional = just(Token::Spread).spanned().or_not().then(arg_value.clone()).map_with(|(spread, value): (Option<Spanned<Untyped, Token>>, _), x| {
+                ts(
+                    CallArgument {
+                        r#type: if let Some(v) = spread { CallArgumentType::Spread(v.span) } else { CallArgumentType::Positional },
+                        value,
+                    },
+                    x,
+                )
+            });
 
-            let arg_named = ident.clone()
-                .map_with(|v, x| sp(v.to_string(), x)).then_ignore(just(Token::EqualSign)).then(arg_value.clone()).map_with(|(name, value), x| ts(CallArgument {
-                name: Some(name),
-                value,
-                spread: false,
-            }, x));
+            let arg_named = ident
+                .clone()
+                .map_with(|v, x| sp(v.to_string(), x))
+                .then_ignore(just(Token::EqualSign))
+                .then(arg_value.clone())
+                .map_with(|(name, value), x| {
+                    ts(
+                        CallArgument {
+                            r#type: CallArgumentType::Named(name),
+                            value,
+                        },
+                        x,
+                    )
+                });
 
             let arg = arg_named.or(arg_positional);
 
@@ -204,89 +234,100 @@ where
                 Token::DollarSign,
                 Token::Underscore,
             ])
-                .repeated()
-                .at_least(2)
-                .collect()
-                .map_with(|v: Vec<Token>, x| {
-                    use std::fmt::Write;
-                    let mut symbol = String::new();
-                    for i in v {
-                        write!(symbol, "{i}").unwrap();
-                    }
+            .repeated()
+            .at_least(2)
+            .collect()
+            .map_with(|v: Vec<Token>, x| {
+                use std::fmt::Write;
+                let mut symbol = String::new();
+                for i in v {
+                    write!(symbol, "{i}").unwrap();
+                }
 
-                    sp(symbol, x)
-                });
+                sp(symbol, x)
+            });
 
             let ident_symbol = ident.map_with(|v, x| sp(v.to_string(), x));
             let op = |t| just(t).map_with(ts);
 
-            return access.pratt(
-                (
-                    postfix(10, array_access, |lhs, rhs, x| {
-                        ts(Expression::ArrayAccess(ArrayAccess {
+            return access.pratt((
+                postfix(10, array_access, |lhs, rhs, x| {
+                    ts(
+                        Expression::ArrayAccess(ArrayAccess {
                             source: Box::new(lhs),
                             indexes: rhs,
-                        }), x)
-                    }),
-                    postfix(10, property, |lhs, rhs, x| {
-                        ts(Expression::Property(Property {
+                        }),
+                        x,
+                    )
+                }),
+                postfix(10, property, |lhs, rhs, x| {
+                    ts(
+                        Expression::Property(Property {
                             source: Box::new(lhs),
                             name: rhs,
-                        }), x)
-                    }),
-                    postfix(9, call, |lhs, rhs, x| {
-                        ts(Expression::Call(Call {
+                        }),
+                        x,
+                    )
+                }),
+                postfix(9, call, |lhs, rhs, x| {
+                    ts(
+                        Expression::Call(Call {
                             source: Box::new(lhs),
                             block: None,
                             arguments: rhs,
-                        }), x)
-                    }),
-                    postfix(8, block_postfix, |mut lhs: TypedSpan<Untyped, Expression<Untyped>>, rhs: TypedSpan<Untyped, Block<Untyped>>, x| {
+                        }),
+                        x,
+                    )
+                }),
+                postfix(
+                    8,
+                    block_postfix,
+                    |mut lhs: TypedSpan<Untyped, Expression<Untyped>>,
+                     rhs: TypedSpan<Untyped, Block<Untyped>>,
+                     x| {
                         let rhs_span = rhs.span;
-                        if let Expression::Call(v) = &mut lhs.inner && v.block.is_none() {
+                        if let Expression::Call(v) = &mut lhs.inner
+                            && v.block.is_none()
+                        {
                             v.block = Some(rhs);
                         } else {
-                            return ts(Expression::Call(Call {
-                                source: Box::new(lhs),
-                                block: Some(rhs),
-                                arguments: vec![],
-                            }), x)
+                            return ts(
+                                Expression::Call(Call {
+                                    source: Box::new(lhs),
+                                    block: Some(rhs),
+                                    arguments: vec![],
+                                }),
+                                x,
+                            );
                         };
                         lhs.span = lhs.span.union(rhs_span);
                         return lhs;
-                    }),
-                    prefix(6, op(Token::Minus), |_, rhs, x| {
-                        ts(Expression::Unary(Unary::Negate(Box::new(rhs))), x)
-                    }),
-                    infix(none(2), infix_symbol, |lhs, infix, rhs, x| {
-                        ts(Expression::Infix(Infix {
+                    },
+                ),
+                prefix(6, op(Token::Minus), |_, rhs, x| {
+                    ts(Expression::Unary(Unary::Negate(Box::new(rhs))), x)
+                }),
+                infix(none(2), infix_symbol, |lhs, infix, rhs, x| {
+                    ts(
+                        Expression::Infix(Infix {
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
                             infix,
-                        }), x)
-                    }),
-                    infix(none(1), ident_symbol, |lhs, infix, rhs, x| {
-                        ts(Expression::Infix(Infix {
+                        }),
+                        x,
+                    )
+                }),
+                infix(none(1), ident_symbol, |lhs, infix, rhs, x| {
+                    ts(
+                        Expression::Infix(Infix {
                             lhs: Box::new(lhs),
                             rhs: Box::new(rhs),
                             infix,
-                        }), x)
-                    })
-                )
-            );
-
-            // access.foldl_with(
-            //     (block_postfix
-            //         .or(array_access)
-            //         .or(property)
-            //         .or(call)
-            //         .or(infix))
-            //     .repeated(),
-            //     |l, r, x| Expression::Postfix {
-            //         source: Box::new(l),
-            //         postfixes: r,
-            //     },
-            // )
+                        }),
+                        x,
+                    )
+                }),
+            ));
         });
 
         expr.map(Statement::Expression)
@@ -304,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_simple() {
-        let x = r#"if {} else {}"#;
+        let x = r#"l(...$)"#;
         let tokens = lexer(x).spanned();
         let mut stream =
             Stream::from_iter(tokens).map((0..x.len()).into(), |(t, s): (_, _)| (t, s));

@@ -31,6 +31,7 @@ pub enum Token<'src> {
     Hash,
     EqualSign,
     Underscore,
+    Spread,
     Hex(&'src str),
     Number(&'src str),
     String(&'src str),
@@ -95,6 +96,7 @@ impl Display for Token<'_> {
             Token::String(v) => v,
             Token::Tilde => "~",
             Token::Backtick => "`",
+            Token::Spread => "...",
             _ => return write!(f, "{self:?}")
         };
 
@@ -275,6 +277,7 @@ impl<'src> From<IJlToken<'src>> for Token<'src> {
             IJlToken::Asterisk => Token::Asterisk,
             IJlToken::Tilde => Token::Tilde,
             IJlToken::Backtick => Token::Backtick,
+            IJlToken::Spread => Token::Spread,
         }
     }
 }

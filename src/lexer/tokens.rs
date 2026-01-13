@@ -62,6 +62,8 @@ pub(super) enum IJlToken<'src> {
     Tilde,
     #[token("`")]
     Backtick,
+    #[token("...")]
+    Spread,
     #[regex(r"(?i)0[a-f]+")]
     Hex(&'src str),
     #[regex(r"[0-9]+(_[0-9]+)*(.[0-9]+(_[0-9]+)*)?")]

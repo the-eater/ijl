@@ -1,8 +1,8 @@
-use logos::{Lexer, Logos, Span};
+use logos::Logos;
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct IJlExtras {
-    pub(super) xml_depth: usize,
+    // pub(super) xml_depth: usize,
 }
 
 #[derive(Debug, Clone, Logos)]

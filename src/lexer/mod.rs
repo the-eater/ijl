@@ -1,7 +1,5 @@
 use std::fmt::Display;
 use std::mem;
-use chumsky::input::InputRef;
-use chumsky::Parser;
 use crate::lexer::tokens::{IJlToken, XIJContentToken, XIJToken};
 use chumsky::span::SimpleSpan;
 use logos::Logos;
@@ -226,7 +224,7 @@ impl<'src> Iterator for Lexer<'src, false> {
     }
 }
 
-pub fn lexer(input: &str) -> Lexer<false> {
+pub fn lexer<'src>(input: &'src str) -> Lexer<'src, false> {
     Lexer::<false> {
         lexer: IJlLexer::IJl(IJlToken::lexer(input)),
         depth: 0,

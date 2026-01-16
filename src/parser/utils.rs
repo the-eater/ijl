@@ -26,6 +26,16 @@ pub struct TypedSpan<C: Carrier, V> {
     pub(crate) inner: V,
 }
 
+impl<C: Carrier, V> TypedSpan<C, V> {
+    pub fn map<R, F: FnOnce(V) -> R>(self, f: F) -> TypedSpan<C, R> {
+        TypedSpan {
+            resolved_type: self.resolved_type,
+            span: self.span,
+            inner: f(self.inner),
+        }
+    }
+}
+
 impl<V> From<Spanned<Untyped, V>> for TypedSpan<Untyped, V> {
     fn from(value: Spanned<Untyped, V>) -> Self {
         TypedSpan {

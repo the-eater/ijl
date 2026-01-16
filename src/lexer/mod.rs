@@ -1,8 +1,8 @@
-use std::fmt::Display;
-use std::mem;
 use crate::lexer::tokens::{IJlToken, XIJContentToken, XIJToken};
 use chumsky::span::SimpleSpan;
 use logos::Logos;
+use std::fmt::Display;
+use std::mem;
 mod tokens;
 
 #[derive(Debug, Copy, Clone, Hash, Ord, PartialOrd, PartialEq, Eq)]
@@ -27,6 +27,8 @@ pub enum Token<'src> {
     Ampersand,
     At,
     Hash,
+    QuestionMark,
+    ExclamationMark,
     EqualSign,
     Underscore,
     Spread,
@@ -47,6 +49,7 @@ pub enum Token<'src> {
     Define,
     Return,
     Yield,
+    As,
     XIJText(&'src str),
     XIJFragmentOpen,
     XIJFragmentClose,
@@ -81,6 +84,8 @@ impl Display for Token<'_> {
             Token::AngleBracketOpen => "<",
             Token::AngleBracketClose => ">",
             Token::Asterisk => "*",
+            Token::ExclamationMark => "!",
+            Token::QuestionMark => "?",
             Token::Colon => ":",
             Token::Semicolon => ";",
             Token::NewLine => "\\n",
@@ -95,7 +100,12 @@ impl Display for Token<'_> {
             Token::Tilde => "~",
             Token::Backtick => "`",
             Token::Spread => "...",
-            _ => return write!(f, "{self:?}")
+            Token::As => "as",
+            Token::XIJFragmentClose => "</>",
+            Token::XIJElementSelfClose => "/>",
+            Token::XIJElementEnd => ">",
+            Token::XIJFragmentOpen => "<>",
+            _ => return write!(f, "{self:?}"),
         };
 
         write!(f, "{s}")
@@ -104,14 +114,52 @@ impl Display for Token<'_> {
 
 pub struct Lexer<'src, const WITH_SPAN: bool = false> {
     lexer: IJlLexer<'src>,
-    depth: usize,
+    stack: Vec<LexerType>,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum LexerType {
+    IJl,
+    XIJ,
+    XIJContent,
 }
 
 enum IJlLexer<'src> {
     IJl(logos::Lexer<'src, IJlToken<'src>>),
     XIJ(logos::Lexer<'src, XIJToken<'src>>),
     XIJContent(logos::Lexer<'src, XIJContentToken<'src>>),
-    Poisoned
+    Poisoned,
+}
+
+impl<'src> IJlLexer<'src> {
+    pub fn lexer_type(&self) -> LexerType {
+        match self {
+            IJlLexer::IJl(_) => LexerType::IJl,
+            IJlLexer::XIJ(_) => LexerType::XIJ,
+            IJlLexer::XIJContent(_) => LexerType::XIJContent,
+            IJlLexer::Poisoned => unreachable!(),
+        }
+    }
+
+    fn morph_into<T: Logos<'src, Source = str, Extras = ()>>(self) -> logos::Lexer<'src, T> {
+        match self {
+            IJlLexer::IJl(l) => l.morph(),
+            IJlLexer::XIJ(l) => l.morph(),
+            IJlLexer::XIJContent(l) => l.morph(),
+            IJlLexer::Poisoned => unreachable!(),
+        }
+    }
+
+    pub fn morph(self, lexer_type: LexerType) -> Self {
+        if lexer_type == self.lexer_type() {
+            return self;
+        }
+        match lexer_type {
+            LexerType::IJl => IJlLexer::IJl(self.morph_into()),
+            LexerType::XIJ => IJlLexer::XIJ(self.morph_into()),
+            LexerType::XIJContent => IJlLexer::XIJContent(self.morph_into()),
+        }
+    }
 }
 
 impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
@@ -135,12 +183,23 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
                     ret = Some(token);
                     match token {
                         Token::XIJFragmentOpen => {
-                            self.depth += 1;
+                            self.stack.push(LexerType::IJl);
                             IJlLexer::XIJContent(l.morph())
                         }
                         Token::XIJElementStart(_) => {
-                            self.depth += 1;
+                            self.stack.push(LexerType::IJl);
                             IJlLexer::XIJ(l.morph())
+                        }
+                        Token::BlockOpen => {
+                            self.stack.push(LexerType::IJl);
+                            IJlLexer::IJl(l)
+                        }
+                        Token::BlockClose => {
+                            let Some(v) = self.stack.pop() else {
+                                unreachable!();
+                            };
+
+                            IJlLexer::IJl(l).morph(v)
                         }
                         _ => IJlLexer::IJl(l),
                     }
@@ -153,16 +212,20 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
                     let token = token.map_or(Token::InternalError, Into::into);
                     ret = Some(token);
                     match token {
-                        Token::XIJElementEnd => {
-                            IJlLexer::XIJContent(l.morph())
+                        Token::BlockOpen => {
+                            self.stack.push(LexerType::XIJ);
+                            IJlLexer::IJl(l.morph())
                         }
                         Token::XIJElementSelfClose => {
-                            self.depth -= 1;
-                            if self.depth == 0 {
-                                IJlLexer::IJl(l.morph())
-                            } else {
-                                IJlLexer::XIJContent(l.morph())
-                            }
+                            let Some(v) = self.stack.pop() else {
+                                unreachable!();
+                            };
+
+                            IJlLexer::XIJ(l).morph(v)
+                        }
+
+                        Token::XIJElementEnd => {
+                            IJlLexer::XIJContent(l.morph())
                         }
 
                         _ => IJlLexer::XIJ(l),
@@ -177,14 +240,24 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
                     ret = Some(token);
                     match token {
                         Token::XIJElementClose(_) | Token::XIJFragmentClose => {
-                            self.depth -= 1;
-                            if self.depth == 0 {
-                                IJlLexer::IJl(l.morph())
-                            } else {
-                                IJlLexer::XIJContent(l.morph())
-                            }
-                        }
+                            let Some(v) = self.stack.pop() else {
+                                unreachable!();
+                            };
 
+                            IJlLexer::XIJContent(l).morph(v)
+                        }
+                        Token::XIJFragmentOpen => {
+                            self.stack.push(LexerType::XIJContent);
+                            IJlLexer::XIJContent(l)
+                        }
+                        Token::XIJElementStart(_) => {
+                            self.stack.push(LexerType::XIJContent);
+                            IJlLexer::XIJ(l.morph())
+                        }
+                        Token::BlockOpen => {
+                            self.stack.push(LexerType::XIJContent);
+                            IJlLexer::IJl(l.morph())
+                        }
                         _ => IJlLexer::XIJContent(l),
                     }
                 } else {
@@ -202,7 +275,7 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
     pub fn spanned(self) -> Lexer<'src, true> {
         Lexer {
             lexer: self.lexer,
-            depth: 0,
+            stack: vec![],
         }
     }
 }
@@ -227,7 +300,7 @@ impl<'src> Iterator for Lexer<'src, false> {
 pub fn lexer<'src>(input: &'src str) -> Lexer<'src, false> {
     Lexer::<false> {
         lexer: IJlLexer::IJl(IJlToken::lexer(input)),
-        depth: 0,
+        stack: vec![],
     }
 }
 
@@ -252,6 +325,8 @@ impl<'src> From<IJlToken<'src>> for Token<'src> {
             IJlToken::At => Token::At,
             IJlToken::Hash => Token::Hash,
             IJlToken::EqualSign => Token::EqualSign,
+            IJlToken::QuestionMark => Token::QuestionMark,
+            IJlToken::ExclamationMark => Token::ExclamationMark,
             IJlToken::Underscore => Token::Underscore,
             IJlToken::Hex(v) => Token::Hex(v),
             IJlToken::Number(v) => Token::Number(v),
@@ -267,7 +342,7 @@ impl<'src> From<IJlToken<'src>> for Token<'src> {
             IJlToken::Define => Token::Define,
             IJlToken::Return => Token::Return,
             IJlToken::Yield => Token::Yield,
-            IJlToken::XIJ (v)=> Token::XIJElementStart(v),
+            IJlToken::XIJ(v) => Token::XIJElementStart(v),
             IJlToken::XIJFragment => Token::XIJFragmentOpen,
             IJlToken::Backslash => Token::Backslash,
             IJlToken::DollarSign => Token::DollarSign,
@@ -276,6 +351,7 @@ impl<'src> From<IJlToken<'src>> for Token<'src> {
             IJlToken::Tilde => Token::Tilde,
             IJlToken::Backtick => Token::Backtick,
             IJlToken::Spread => Token::Spread,
+            IJlToken::As => Token::As,
         }
     }
 }
@@ -303,6 +379,8 @@ impl<'src> From<XIJToken<'src>> for Token<'src> {
             XIJToken::AssignEvent => Token::XIJEventAssign,
             XIJToken::String(v) => Token::String(v),
             XIJToken::Expression => Token::BlockOpen,
+            XIJToken::Hex(h) => Token::Hex(h),
+            XIJToken::Number(n) => Token::Number(n),
         }
     }
 }
@@ -323,6 +401,66 @@ mod tests {
             Token::XIJFragmentClose,
             Token::Semicolon,
             Token::Ident("wow"),
+        ];
+
+        assert_eq!(output, lexer(input).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_spread() {
+        let input = "...";
+        let output = vec![Token::Spread];
+
+        assert_eq!(output, lexer(input).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_xij() {
+        let input = r#"<>{1}</>"#;
+        let output = vec![
+            Token::XIJFragmentOpen,
+            Token::BlockOpen,
+            Token::Number("1"),
+            Token::BlockClose,
+            Token::XIJFragmentClose,
+        ];
+
+        assert_eq!(output, lexer(input).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_example_xij() {
+        let input = r#"<hello world=42 5 "yes" {...wow}>item</hello>"#;
+        let output = vec![
+            Token::XIJElementStart("hello"),
+            Token::Ident("world"),
+            Token::EqualSign,
+            Token::Number("42"),
+            Token::Number("5"),
+            Token::String(r#""yes""#),
+            Token::BlockOpen,
+            Token::Spread,
+            Token::Ident("wow"),
+            Token::BlockClose,
+            Token::XIJElementEnd,
+            Token::XIJText("item"),
+            Token::XIJElementClose("hello")
+        ];
+
+        assert_eq!(output, lexer(input).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_simple_html() {
+        let input = "<div>\n  <Counter />\n</div>";
+        let output = vec![
+            Token::XIJElementStart("div"),
+            Token::XIJElementEnd,
+            Token::XIJText("\n  "),
+            Token::XIJElementStart("Counter"),
+            Token::XIJElementSelfClose,
+            Token::XIJText("\n"),
+            Token::XIJElementClose("div")
         ];
 
         assert_eq!(output, lexer(input).collect::<Vec<_>>());

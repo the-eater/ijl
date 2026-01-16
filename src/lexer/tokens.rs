@@ -1,14 +1,10 @@
-use logos::Logos;
+use logos::{Lexer, Logos};
 
-#[derive(Debug, Clone, Default)]
-pub(super) struct IJlExtras {
-    // pub(super) xml_depth: usize,
-}
 
-#[derive(Debug, Clone, Logos)]
-#[logos(skip r"[ \r\t]+", extras = IJlExtras)]
+#[derive(Debug, Clone, Logos, PartialEq, Eq)]
+#[logos(skip r"[ \r\t]+")]
 pub(super) enum IJlToken<'src> {
-    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*")]
+    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*", strip_xml_prefix)]
     XIJ(&'src str),
     #[token(r"<>")]
     XIJFragment,
@@ -24,6 +20,8 @@ pub(super) enum IJlToken<'src> {
     ArrayOpen,
     #[token("]")]
     ArrayClose,
+    #[token("...", priority = 100)]
+    Spread,
     #[token(".")]
     Dot,
     #[token("+")]
@@ -40,6 +38,10 @@ pub(super) enum IJlToken<'src> {
     Asterisk,
     #[token("%")]
     Percentage,
+    #[token("?")]
+    QuestionMark,
+    #[token("!")]
+    ExclamationMark,
     #[token(">")]
     AngleBracketClose,
     #[token("<")]
@@ -62,11 +64,9 @@ pub(super) enum IJlToken<'src> {
     Tilde,
     #[token("`")]
     Backtick,
-    #[token("...")]
-    Spread,
-    #[regex(r"(?i)0[a-f]+")]
+    #[regex(r"(?i)0x[a-f]+")]
     Hex(&'src str),
-    #[regex(r"[0-9]+(_[0-9]+)*(.[0-9]+(_[0-9]+)*)?")]
+    #[regex(r"[0-9]+(_[0-9]+)*(\.[0-9]+(_[0-9]+)*)?")]
     Number(&'src str),
     #[regex(r#""[^"]*(\\"[^"]*)*""#)]
     String(&'src str),
@@ -92,10 +92,12 @@ pub(super) enum IJlToken<'src> {
     Return,
     #[token("yield")]
     Yield,
+    #[token("as")]
+    As,
 }
 
 #[derive(Debug, Clone, Logos)]
-#[logos(skip r"\s+", extras = IJlExtras)]
+#[logos(skip r"\s+")]
 pub(super) enum XIJToken<'src> {
     #[token("/>")]
     SelfClose,
@@ -109,25 +111,44 @@ pub(super) enum XIJToken<'src> {
     AssignEvent,
     #[token("{")]
     Expression,
+    #[regex(r"(?i)0x[a-f]+")]
+    Hex(&'src str),
+    #[regex(r"[0-9]+(_[0-9]+)*(\.[0-9]+(_[0-9]+)*)?")]
+    Number(&'src str),
     #[regex(r#""[^"]*(\\"[^"]*)*""#)]
     String(&'src str),
 }
 
 #[derive(Debug, Clone, Logos)]
-#[logos(extras = IJlExtras)]
+#[logos()]
 pub(super) enum XIJContentToken<'src> {
     #[token("{")]
     Block,
     #[regex(r"<>")]
     XmlFragment,
-    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*")]
+    #[regex(r"<\p{XID_START}\p{XID_CONTINUE}*", strip_xml_prefix)]
     Xml(&'src str),
-    #[regex(r"</\p{XID_START}\p{XID_CONTINUE}*>")]
+    #[regex(r"</\p{XID_START}\p{XID_CONTINUE}*>", strip_xml_prefix)]
     XmlClose(&'src str),
     #[token("</>")]
     XmlFragmentClose,
     #[regex(r"[^{<]+", priority = 1)]
     Text(&'src str),
+}
+
+fn strip_xml_prefix<'src, T: Logos<'src, Source = str>>(logos: &mut Lexer<'src, T>) -> &'src str {
+    let mut input = logos.slice();
+    if let Some(v) = input.strip_suffix(">") {
+        input = v;
+    }
+
+    if input.starts_with("</") {
+        return &input[2..];
+    }
+    if input.starts_with("<") {
+        return &input[1..];
+    }
+    input
 }
 
 #[cfg(test)]
@@ -147,5 +168,21 @@ mod tests {
     fn test_simple_example() {
         let source = include_str!("../../examples/simple.ijl");
         let _tokens = IJlToken::lexer(source).collect::<Result<Vec<_>, _>>().unwrap();
+    }
+
+    #[test]
+    fn test_number() {
+        let input = "1 2 3 4 5";
+        let expected = vec![
+            IJlToken::Number("1"),
+            IJlToken::Number("2"),
+            IJlToken::Number("3"),
+            IJlToken::Number("4"),
+            IJlToken::Number("5"),
+        ];
+
+
+        let output = IJlToken::lexer(input).collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(expected, output);
     }
 }

@@ -1,4 +1,5 @@
-mod utils;
+pub mod utils;
+pub mod xij;
 
 use crate::lexer::Token;
 use crate::parser::utils::{Spanned, sp, ts};
@@ -8,6 +9,7 @@ use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 use std::fmt::Debug;
 use utils::{Carrier, TypedSpan, Untyped};
+use crate::parser::xij::{XIJElement, XIJFragment};
 
 #[derive(Debug, Clone)]
 pub enum Statement<C: Carrier> {
@@ -32,31 +34,51 @@ pub enum Expression<C: Carrier> {
     Property(Property<C>),
     Call(Call<C>),
     Unary(Unary<C>),
+    XIJFragment(XIJFragment<C>),
+    XIJElement(XIJElement<C>)
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum UnarySymbolLocation {
+    Postfix,
+    Prefix,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum UnarySymbol {
+    Question(UnarySymbolLocation),
+    Exclamation(UnarySymbolLocation),
+    Minus,
+    Plus,
+    Asterisk,
+    Tilde,
+    Ampersand,
 }
 
 #[derive(Debug, Clone)]
-pub enum Unary<C: Carrier> {
-    Negate(Box<TypedSpan<C, Expression<C>>>),
+pub struct Unary<C: Carrier> {
+    pub symbol: Spanned<C, UnarySymbol>,
+    pub source: Box<TypedSpan<C, Expression<C>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Infix<C: Carrier> {
-    lhs: Box<TypedSpan<C, Expression<C>>>,
-    rhs: Box<TypedSpan<C, Expression<C>>>,
-    infix: Spanned<C, String>,
+    pub lhs: Box<TypedSpan<C, Expression<C>>>,
+    pub rhs: Box<TypedSpan<C, Expression<C>>>,
+    pub infix: Spanned<C, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Call<C: Carrier> {
-    source: Box<TypedSpan<C, Expression<C>>>,
-    arguments: Vec<TypedSpan<C, CallArgument<C>>>,
-    block: Option<TypedSpan<C, Block<C>>>,
+    pub source: Box<TypedSpan<C, Expression<C>>>,
+    pub arguments: Vec<TypedSpan<C, CallArgument<C>>>,
+    pub block: Option<TypedSpan<C, Block<C>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct CallArgument<C: Carrier> {
-    r#type: CallArgumentType<C>,
-    value: CallArgumentValue<C>,
+    pub r#type: CallArgumentType<C>,
+    pub value: CallArgumentValue<C>,
 }
 
 #[derive(Debug, Clone)]
@@ -74,22 +96,22 @@ pub enum CallArgumentValue<C: Carrier> {
 
 #[derive(Debug, Clone)]
 pub struct Property<C: Carrier> {
-    source: Box<TypedSpan<C, Expression<C>>>,
-    name: Spanned<C, String>,
+    pub source: Box<TypedSpan<C, Expression<C>>>,
+    pub name: Spanned<C, String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct ArrayAccess<C: Carrier> {
-    source: Box<TypedSpan<C, Expression<C>>>,
-    indexes: Vec<Box<TypedSpan<C, Expression<C>>>>,
+    pub source: Box<TypedSpan<C, Expression<C>>>,
+    pub indexes: Vec<Box<TypedSpan<C, Expression<C>>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block<C: Carrier> {
-    items: Vec<TypedSpan<C, Statement<C>>>,
+    pub items: Vec<TypedSpan<C, Statement<C>>>,
 }
 
-fn parser<'tokens, 'src: 'tokens, I>()
+pub(crate) fn parser<'tokens, 'src: 'tokens, I>()
 -> impl Parser<'tokens, I, Statement<Untyped>, extra::Err<Rich<'tokens, Token<'src>>>>
 where
     I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan>,
@@ -104,8 +126,7 @@ where
 
     let block = just(Token::BlockOpen)
         .ignore_then(
-            stmt
-                .clone()
+            stmt.clone()
                 .map_with(ts)
                 .separated_by(just(Token::Semicolon).or(just(Token::NewLine)))
                 .collect(),
@@ -140,6 +161,8 @@ where
         .or(variable)
         .or(literal)
         .map_with(ts);
+
+    let access = access.or(xij::parser(expr.clone()));
 
     let array_access = just(Token::ArrayOpen)
         .ignore_then(
@@ -193,10 +216,37 @@ where
 
     let arg = arg_named.or(arg_positional);
 
-    let call = just(Token::BracketOpen)
-        .ignore_then(arg.separated_by(just(Token::Comma)).collect::<Vec<_>>())
-        .then_ignore(just(Token::BracketClose));
+    let call =
+        arg.separated_by(just(Token::Comma)).collect::<Vec<_>>().delimited_by(just(Token::BracketOpen), just(Token::BracketClose));
     let block_postfix = block.map_with(ts);
+
+    let unary_postfix = one_of([
+        Token::ExclamationMark,
+        Token::QuestionMark,
+    ]).map_with(|v, x| sp(match v {
+        Token::ExclamationMark => UnarySymbol::Exclamation(UnarySymbolLocation::Postfix),
+        Token::QuestionMark => UnarySymbol::Question(UnarySymbolLocation::Postfix),
+        _ => unreachable!(),
+    }, x));
+    let unary_prefix = one_of([
+        Token::Tilde,
+        Token::Minus,
+        Token::Plus,
+        Token::Asterisk,
+        Token::QuestionMark,
+        Token::ExclamationMark,
+        Token::Ampersand,
+    ])
+        .map_with(|v, x| sp(match v {
+            Token::ExclamationMark => UnarySymbol::Exclamation(UnarySymbolLocation::Prefix),
+            Token::QuestionMark => UnarySymbol::Question(UnarySymbolLocation::Prefix),
+            Token::Tilde => UnarySymbol::Tilde,
+            Token::Minus => UnarySymbol::Minus,
+            Token::Plus => UnarySymbol::Plus,
+            Token::Asterisk => UnarySymbol::Asterisk,
+            Token::Ampersand => UnarySymbol::Ampersand,
+            _ => unreachable!(),
+        }, x));
 
     let infix_symbol = one_of(&[
         Token::Pipe,
@@ -230,7 +280,7 @@ where
     });
 
     let ident_symbol = ident.map_with(|v, x| sp(v.to_string(), x));
-    let op = |t| just(t).map_with(ts);
+    // let op = |t| just(t).map_with(ts);
 
     let full_expr = access.pratt((
         postfix(10, array_access, |lhs, rhs, x| {
@@ -286,8 +336,17 @@ where
                 return lhs;
             },
         ),
-        prefix(6, op(Token::Minus), |_, rhs, x| {
-            ts(Expression::Unary(Unary::Negate(Box::new(rhs))), x)
+        postfix(7, unary_postfix, |lhs, rhs, x| {
+            ts(Expression::Unary(Unary {
+                symbol: rhs,
+                source: Box::new(lhs),
+            }), x)
+        }),
+        prefix(6, unary_prefix, |lhs, rhs, x| {
+            ts(Expression::Unary(Unary {
+                symbol: lhs,
+                source: Box::new(rhs),
+            }), x)
         }),
         infix(none(2), infix_symbol, |lhs, infix, rhs, x| {
             ts(
@@ -324,13 +383,19 @@ mod tests {
     use chumsky::Parser;
     use chumsky::input::Input;
     use chumsky::input::Stream;
+    use crate::parse;
+
+    #[test]
+    fn test_expr() {
+        let x = include_str!("../../examples/expr.ijl");
+        let x = parse(x);
+    }
 
     #[test]
     fn test_simple() {
-        let x = r#"l(...$)"#;
+        let x = r#"<>hello {"world"}</>"#;
         let tokens = lexer(x).spanned();
-        let stream =
-            Stream::from_iter(tokens).map((0..x.len()).into(), |(t, s): (_, _)| (t, s));
+        let stream = Stream::from_iter(tokens).map((0..x.len()).into(), |(t, s): (_, _)| (t, s));
 
         let (src, errs) = parser().parse(stream).into_output_errors();
         println!("{src:#?}");

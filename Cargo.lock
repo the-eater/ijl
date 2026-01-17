@@ -110,6 +110,10 @@ dependencies = [
 [[package]]
 name = "ijl"
 version = "0.1.0"
+
+[[package]]
+name = "ijl-core"
+version = "0.1.0"
 dependencies = [
  "ariadne",
  "chumsky",

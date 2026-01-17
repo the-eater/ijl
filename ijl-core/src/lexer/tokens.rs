@@ -166,7 +166,7 @@ mod tests {
 
     #[test]
     fn test_simple_example() {
-        let source = include_str!("../../examples/simple.ijl");
+        let source = include_str!("../../../examples/simple.ijl");
         let _tokens = IJlToken::lexer(source).collect::<Result<Vec<_>, _>>().unwrap();
     }
 

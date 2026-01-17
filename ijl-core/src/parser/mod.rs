@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_expr() {
-        let x = include_str!("../../examples/expr.ijl");
+        let x = include_str!("../../../examples/expr.ijl");
         let x = parse(x);
     }
 

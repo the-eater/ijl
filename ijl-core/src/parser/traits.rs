@@ -324,7 +324,7 @@ impl<F: FinalizeProgress> FinalizeProgress for TypedSpan<InProgress<Typed>, F> {
             })
         } else {
             missing_types.items.push(());
-            return Err(());
+            Err(())
         }
     }
 }

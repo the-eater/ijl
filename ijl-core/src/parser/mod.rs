@@ -249,7 +249,6 @@ where
         });
 
     let arg_named = ident
-        .clone()
         .map_with(|v, x| sp(v.to_string(), x))
         .then_ignore(just(Token::EqualSign))
         .then(arg_value.clone())
@@ -438,7 +437,7 @@ where
                     );
                 };
                 lhs.span = lhs.span.union(rhs_span);
-                return lhs;
+                lhs
             },
         ),
         postfix(70, unary_postfix, |lhs, rhs, x| {

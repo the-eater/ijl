@@ -148,7 +148,7 @@ where
         select! { Token::XIJElementClose(c) => c.to_string() }.labelled("xml close tag");
 
     let xml_end = just(Token::XIJElementSelfClose).map(|_| (true, vec![]))
-        .or(just(Token::XIJElementEnd).ignore_then(xij_nodes).then_ignore(xij_close_name.clone()).map(|nodes| (false, nodes)));
+        .or(just(Token::XIJElementEnd).ignore_then(xij_nodes).then_ignore(xij_close_name).map(|nodes| (false, nodes)));
 
     element_decl.define(
         xml_start

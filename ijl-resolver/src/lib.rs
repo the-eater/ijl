@@ -4,12 +4,8 @@ mod utils;
 
 use crate::utils::Named;
 use ijl_core::parser::InfixType;
+use ijl_type::Type;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
-use std::ops::Deref;
-use std::sync::Arc;
-use ijl_type::{DynamicType, StaticType, Type};
-
 
 #[derive(Debug, Clone)]
 pub struct Registry {
@@ -76,10 +72,10 @@ pub struct Operator {
 
 #[cfg(test)]
 pub mod tests {
-    use std::collections::HashMap;
-    use std::sync::Arc;
     use crate::builtin::ANY_TYPE;
     use ijl_type::{DynamicType, Type};
+    use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn test_dynamic_eq() {

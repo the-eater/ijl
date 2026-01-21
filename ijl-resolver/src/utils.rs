@@ -1,7 +1,6 @@
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use ijl_core::parser::{IntoProgressCarrier, Typed};
-use ijl_core::parser::utils::{Carrier, InProgress, SimpleSpan, Untracked, Untyped};
+use ijl_core::parser::utils::{Carrier, InProgress, SimpleSpan, Untyped};
 use ijl_type::Type;
 
 pub trait Named {

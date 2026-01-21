@@ -1,11 +1,10 @@
 use crate::builtin::{INT_TYPE, STRING_TYPE, any_shape, int_shape, none_shape, string_shape, NONE_TYPE};
-use crate::utils::{Resolvable, Resolving};
+use crate::utils::Resolvable;
 use crate::{Method, Shape};
 use ijl_core::parser::utils::{Carrier, TypedSpan, Untyped};
-use ijl_core::parser::{Assign, Block, Call, Expression, FinalizeProgress, InfixType, Literal, MissingTypes, Property, Statement, Typed};
-use ijl_core::parser::{InProgress, IntoProgress, IntoProgressCarrier};
+use ijl_core::parser::{Assign, Block, Call, Expression, FinalizeProgress, Literal, MissingTypes, Property, Statement, Typed};
+use ijl_core::parser::{InProgress, IntoProgress};
 use std::collections::HashMap;
-use std::ops::Deref;
 use std::task::Context;
 use thiserror::Error;
 use ijl_type::Type;
@@ -79,7 +78,7 @@ impl Registry {
                 }
                 let _t = self.progress_resolve_expression(&mut expr.inner, context)?;
                 expr.resolved_type = Some(_t.clone());
-                return Ok(StatementResult::QuietReturn(_t));
+                Ok(StatementResult::QuietReturn(_t))
             }
         }
     }
@@ -100,10 +99,10 @@ impl Registry {
             let _t = self.progress_resolve_statement(&mut stmt.inner, context)?;
             match (_t, &block_return, block_return_hard) {
                 (StatementResult::Return(_t), _, false) => {
-                    block_return = Some((_t, stmt.span.clone()));
+                    block_return = Some((_t, stmt.span));
                     block_return_hard = true;
                 }
-                (StatementResult::Return(_t), Some((_ot, sp)), true) => {
+                (StatementResult::Return(_t), Some((_ot, _sp)), true) => {
                     if &_t != _ot {
                         todo!();
                     }
@@ -146,7 +145,7 @@ impl Registry {
         context: &mut Context,
     ) -> Result<Type, ResolutionError> {
         match input {
-            Expression::Ident(id) => {
+            Expression::Ident(_id) => {
                 todo!()
             }
             Expression::Expression(expr) => {
@@ -186,7 +185,7 @@ impl Registry {
                     }
                     Some(operator) => {
                         let s = self.shapes.get(left.name()).unwrap();
-                        if let Some(_) = s.assign_operator.get(&(operator.clone(), right)) {
+                        if s.assign_operator.get(&(operator.clone(), right)).is_some() {
                             Ok(left)
                         } else {
                             Err(ResolutionError::TypeNotFound)
@@ -208,7 +207,7 @@ impl Registry {
             Expression::Call(Call {
                 source,
                 arguments,
-                block,
+                block: _,
             }) => {
                 if let Expression::Property(Property { source, name }) = &mut source.inner {
                     // method
@@ -220,7 +219,7 @@ impl Registry {
                         }
                     }
 
-                    if let Some(shape) = self.get_property(&t, name.as_str()) {
+                    if let Some(_shape) = self.get_property(&t, name.as_str()) {
                         todo!();
                     }
 
@@ -242,7 +241,7 @@ impl Registry {
         let mut input: Block<InProgress<Typed>> = input.into_progress::<Typed>();
         self.progress_resolve_block(&mut input, context)?;
         let mut missing_types = Default::default();
-        Ok(input.finalize(&mut missing_types).map_err(|e| missing_types)?)
+        Ok(input.finalize(&mut missing_types).map_err(|_e| missing_types)?)
     }
 
     fn into_resolved_statement(
@@ -253,7 +252,7 @@ impl Registry {
         let mut input: Statement<InProgress<Typed>> = input.into_progress::<Typed>();
         self.progress_resolve_statement(&mut input, context)?;
         let mut missing_types = Default::default();
-        Ok(input.finalize(&mut missing_types).map_err(|e| missing_types)?)
+        Ok(input.finalize(&mut missing_types).map_err(|_e| missing_types)?)
     }
 
     fn into_resolved(
@@ -264,7 +263,7 @@ impl Registry {
         let mut input: Expression<InProgress<Typed>> = input.into_progress::<Typed>();
         self.progress_resolve_expression(&mut input, context)?;
         let mut missing_types = Default::default();
-        Ok(input.finalize(&mut missing_types).map_err(|e| missing_types)?)
+        Ok(input.finalize(&mut missing_types).map_err(|_e| missing_types)?)
     }
 
     fn resolve<C: Carrier>(&self, input: &Expression<C>) -> Result<Type, ResolutionError> {
@@ -273,7 +272,7 @@ impl Registry {
                 todo!()
             }
             Expression::Expression(v) => self.resolve(&v.inner),
-            Expression::Block(b) => {
+            Expression::Block(_b) => {
                 todo!()
             }
             Expression::Literal(Literal::String(_)) => Ok(STRING_TYPE),
@@ -308,7 +307,7 @@ impl Registry {
             Expression::Call(Call {
                 source,
                 arguments,
-                block,
+                block: _,
             }) => {
                 if let Expression::Property(Property { source, name }) = &source.inner {
                     // method
@@ -320,7 +319,7 @@ impl Registry {
                         }
                     }
 
-                    if let Some(shape) = self.get_property(&t, name.as_str()) {
+                    if let Some(_shape) = self.get_property(&t, name.as_str()) {
                         todo!();
                     }
 

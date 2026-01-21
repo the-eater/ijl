@@ -5,4 +5,4 @@ edition = "2024"
 
 [workspace]
 resolver = "3"
-members = ["", "ijl-core"]
+members = ["", "ijl-core", "ijl-interp", "ijl-resolver", "ijl-type"]

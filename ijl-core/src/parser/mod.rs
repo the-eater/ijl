@@ -1,15 +1,20 @@
 pub mod utils;
 pub mod xij;
+mod traits;
 
+use chumsky::extra::{ParserExtra};
 use crate::lexer::Token;
 use crate::parser::utils::{Spanned, sp, ts};
-use chumsky::input::ValueInput;
-use chumsky::pratt::{infix, none, postfix, prefix};
+use chumsky::input::{MapExtra, ValueInput};
+use chumsky::pratt::{infix, left, none, postfix, prefix, right};
 use chumsky::prelude::*;
 use chumsky::span::SimpleSpan;
 use std::fmt::Debug;
-use utils::{Carrier, TypedSpan, Untyped};
+use chumsky::container::{OrderedSeq};
 use crate::parser::xij::{XIJElement, XIJFragment};
+
+pub use utils::{Untyped, InProgress, Typed, Carrier, TypedSpan};
+pub use traits::*;
 
 #[derive(Debug, Clone)]
 pub enum Statement<C: Carrier> {
@@ -30,6 +35,7 @@ pub enum Expression<C: Carrier> {
     Block(Block<C>),
     Literal(Literal),
     Infix(Infix<C>),
+    Assign(Assign<C>),
     ArrayAccess(ArrayAccess<C>),
     Property(Property<C>),
     Call(Call<C>),
@@ -61,11 +67,53 @@ pub struct Unary<C: Carrier> {
     pub source: Box<TypedSpan<C, Expression<C>>>,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub enum InfixType {
+    // 0
+    As,
+    // 1
+    Multiply,
+    Divide,
+    Modulo,
+    // 2
+    Add,
+    Subtract,
+    // 3
+    ShiftLeft,
+    ShiftRight,
+    // 4
+    BitAnd,
+    // 5
+    BitXor,
+    // 6
+    BitOr,
+    // 7
+    Equals,
+    NotEquals,
+    LessThan,
+    GreaterThan,
+    LessThanOrEquals,
+    GreaterThanOrEquals,
+    // 6
+    LogicalAnd,
+    LogicalOr,
+    // 7
+    Symbol(String),
+    Word(String)
+}
+
+#[derive(Debug, Clone)]
+pub struct Assign<C: Carrier> {
+    pub lhs: Box<TypedSpan<C, Expression<C>>>,
+    pub rhs: Box<TypedSpan<C, Expression<C>>>,
+    pub modifier: Spanned<C, Option<InfixType>>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Infix<C: Carrier> {
     pub lhs: Box<TypedSpan<C, Expression<C>>>,
     pub rhs: Box<TypedSpan<C, Expression<C>>>,
-    pub infix: Spanned<C, String>,
+    pub infix: Spanned<C, InfixType>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,11 +151,13 @@ pub struct Property<C: Carrier> {
 #[derive(Debug, Clone)]
 pub struct ArrayAccess<C: Carrier> {
     pub source: Box<TypedSpan<C, Expression<C>>>,
-    pub indexes: Vec<Box<TypedSpan<C, Expression<C>>>>,
+    pub indexes: Vec<TypedSpan<C, Expression<C>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct Block<C: Carrier> {
+    pub return_type: C::Type,
+    pub yield_type: C::Type,
     pub items: Vec<TypedSpan<C, Statement<C>>>,
 }
 
@@ -132,7 +182,7 @@ where
                 .collect(),
         )
         .then_ignore(just(Token::BlockClose))
-        .map(|v| Block { items: v });
+        .map(|v| Block { return_type: (), yield_type: (), items: v });
 
     let block_expr = block.clone().map(Expression::Block);
 
@@ -167,7 +217,6 @@ where
     let array_access = just(Token::ArrayOpen)
         .ignore_then(
             expr.clone()
-                .map(Box::new)
                 .separated_by(just(Token::Comma))
                 .collect::<Vec<_>>(),
         )
@@ -276,14 +325,70 @@ where
             write!(symbol, "{i}").unwrap();
         }
 
-        sp(symbol, x)
+        sp(InfixType::Symbol(symbol), x)
     });
 
-    let ident_symbol = ident.map_with(|v, x| sp(v.to_string(), x));
+    let ident_symbol = ident.map_with(|v, x| sp(InfixType::Word(v.to_string()), x));
     // let op = |t| just(t).map_with(ts);
 
+    pub fn make_infix< 'src, 'b, I: Input<'src, Span = SimpleSpan>, E: ParserExtra<'src, I>>(lhs: TypedSpan<Untyped, Expression<Untyped>>, infix: Spanned<Untyped, InfixType>, rhs: TypedSpan<Untyped, Expression<Untyped>>, x: &mut MapExtra<'src, 'b, I, E>) -> TypedSpan<Untyped, Expression<Untyped>> {
+        ts(
+            Expression::Infix(Infix {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                infix,
+            }),
+            x,
+        )
+    }
+
+    pub fn make_assign< 'src, 'b, I: Input<'src, Span = SimpleSpan>, E: ParserExtra<'src, I>>(lhs: TypedSpan<Untyped, Expression<Untyped>>, modifier: Spanned<Untyped, Option<InfixType>>, rhs: TypedSpan<Untyped, Expression<Untyped>>, x: &mut MapExtra<'src, 'b, I, E>) -> TypedSpan<Untyped, Expression<Untyped>> {
+        ts(
+            Expression::Assign(Assign {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+                modifier
+            }),
+            x,
+        )
+    }
+
+    fn if_as<'tokens, 'src: 'tokens, I, O: Clone>(i: impl OrderedSeq<'tokens, Token<'src>> + Clone, output: O) -> impl Parser<'tokens, I, Spanned<Untyped, O>, extra::Err<Rich<'tokens, Token<'src>>>> + Clone
+    where
+        I: ValueInput<'tokens, Token = Token<'src>, Span = SimpleSpan> {
+        just(i).map_with(move |_, x| sp(output.clone(), x))
+    }
+    // let if_as = |t, o: InfixType| just(t).map_with(move |_, x| sp(o.clone(), x));
+
+    let eq_infix = choice(
+        (
+            if_as([Token::EqualSign; 2], InfixType::Equals),
+            if_as([Token::ExclamationMark, Token::EqualSign], InfixType::NotEquals),
+            if_as(Token::AngleBracketOpen, InfixType::LessThan),
+            if_as(Token::AngleBracketClose, InfixType::GreaterThan),
+            if_as([Token::AngleBracketOpen, Token::EqualSign], InfixType::LessThanOrEquals),
+            if_as([Token::AngleBracketClose, Token::EqualSign], InfixType::GreaterThanOrEquals),
+        )
+    );
+
+    let assign = choice(
+        (
+            if_as(Token::EqualSign, None),
+            if_as([Token::Plus, Token::EqualSign], Some(InfixType::Add)),
+            if_as([Token::Minus, Token::EqualSign], Some(InfixType::Subtract)),
+            if_as([Token::Asterisk, Token::EqualSign], Some(InfixType::Multiply)),
+            if_as([Token::Slash, Token::EqualSign], Some(InfixType::Divide)),
+            if_as([Token::Percentage, Token::EqualSign], Some(InfixType::Modulo)),
+            if_as([Token::Ampersand, Token::EqualSign], Some(InfixType::BitAnd)),
+            if_as([Token::Pipe, Token::EqualSign], Some(InfixType::BitOr)),
+            if_as([Token::Xor, Token::EqualSign], Some(InfixType::BitXor)),
+            if_as([Token::AngleBracketOpen, Token::AngleBracketOpen, Token::EqualSign], Some(InfixType::ShiftLeft)),
+            if_as([Token::AngleBracketClose, Token::AngleBracketClose, Token::EqualSign], Some(InfixType::ShiftRight)),
+        )
+    );
+
     let full_expr = access.pratt((
-        postfix(10, array_access, |lhs, rhs, x| {
+        postfix(100, array_access, |lhs, rhs, x| {
             ts(
                 Expression::ArrayAccess(ArrayAccess {
                     source: Box::new(lhs),
@@ -292,7 +397,7 @@ where
                 x,
             )
         }),
-        postfix(10, property, |lhs, rhs, x| {
+        postfix(100, property, |lhs, rhs, x| {
             ts(
                 Expression::Property(Property {
                     source: Box::new(lhs),
@@ -301,7 +406,7 @@ where
                 x,
             )
         }),
-        postfix(9, call, |lhs, rhs, x| {
+        postfix(90, call, |lhs, rhs, x| {
             ts(
                 Expression::Call(Call {
                     source: Box::new(lhs),
@@ -312,7 +417,7 @@ where
             )
         }),
         postfix(
-            8,
+            80,
             block_postfix,
             |mut lhs: TypedSpan<Untyped, Expression<Untyped>>,
              rhs: TypedSpan<Untyped, Block<Untyped>>,
@@ -336,38 +441,31 @@ where
                 return lhs;
             },
         ),
-        postfix(7, unary_postfix, |lhs, rhs, x| {
+        postfix(70, unary_postfix, |lhs, rhs, x| {
             ts(Expression::Unary(Unary {
                 symbol: rhs,
                 source: Box::new(lhs),
             }), x)
         }),
-        prefix(6, unary_prefix, |lhs, rhs, x| {
+        prefix(60, unary_prefix, |lhs, rhs, x| {
             ts(Expression::Unary(Unary {
                 symbol: lhs,
                 source: Box::new(rhs),
             }), x)
         }),
-        infix(none(2), infix_symbol, |lhs, infix, rhs, x| {
-            ts(
-                Expression::Infix(Infix {
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                    infix,
-                }),
-                x,
-            )
-        }),
-        infix(none(1), ident_symbol, |lhs, infix, rhs, x| {
-            ts(
-                Expression::Infix(Infix {
-                    lhs: Box::new(lhs),
-                    rhs: Box::new(rhs),
-                    infix,
-                }),
-                x,
-            )
-        }),
+        infix(left(50), if_as(Token::As, InfixType::As), make_infix),
+        infix(left(49), if_as(Token::Asterisk, InfixType::Multiply).or(if_as(Token::Slash, InfixType::Divide)).or(if_as(Token::Percentage, InfixType::Modulo)), make_infix),
+        infix(left(48), if_as(Token::Plus, InfixType::Add).or(if_as(Token::Minus, InfixType::Subtract)), make_infix),
+        infix(left(47), if_as([Token::AngleBracketOpen, Token::AngleBracketOpen], InfixType::ShiftLeft).or(if_as([Token::AngleBracketClose; 2], InfixType::ShiftRight)), make_infix),
+        infix(left(46), if_as(Token::Ampersand, InfixType::BitAnd), make_infix),
+        infix(left(45), if_as(Token::Xor, InfixType::BitXor), make_infix),
+        infix(left(44), if_as(Token::Pipe, InfixType::BitOr), make_infix),
+        infix(left(43), eq_infix, make_infix),
+        infix(left(42), if_as([Token::Ampersand; 2], InfixType::LogicalAnd), make_infix),
+        infix(left(41), if_as([Token::Pipe; 2], InfixType::LogicalOr), make_infix),
+        infix(right(40), assign, make_assign),
+        infix(none(2), infix_symbol, make_infix),
+        infix(none(1), ident_symbol, make_infix),
     ));
 
     expr.define(full_expr);

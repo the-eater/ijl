@@ -1,0 +1,9 @@
+[package]
+name = "ijl-resolver"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ijl-core = { path = "../ijl-core" }
+ijl-type = { path = "../ijl-type" }
+thiserror = "2"

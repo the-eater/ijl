@@ -1,6 +1,7 @@
 pub mod utils;
 pub mod xij;
 mod traits;
+mod statement;
 
 use chumsky::extra::{ParserExtra};
 use crate::lexer::Token;

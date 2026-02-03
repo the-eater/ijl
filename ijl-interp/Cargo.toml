@@ -5,3 +5,4 @@ edition = "2024"
 
 [dependencies]
 ijl-core = { path = "../ijl-core" }
+gc-arena = "0.5.3"

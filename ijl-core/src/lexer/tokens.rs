@@ -36,6 +36,8 @@ pub(super) enum IJlToken<'src> {
     DollarSign,
     #[token("*")]
     Asterisk,
+    #[token("**", priority = 100)]
+    DoubleAsterisk,
     #[token("%")]
     Percentage,
     #[token("?")]
@@ -52,6 +54,8 @@ pub(super) enum IJlToken<'src> {
     Pipe,
     #[token("&")]
     Ampersand,
+    #[token("&&", priority = 100)]
+    DoubleAmpersand,
     #[token("@")]
     At,
     #[token("#")]
@@ -68,7 +72,7 @@ pub(super) enum IJlToken<'src> {
     Hex(&'src str),
     #[regex(r"[0-9]+(_[0-9]+)*(\.[0-9]+(_[0-9]+)*)?")]
     Number(&'src str),
-    #[regex(r#""[^"]*(\\"[^"]*)*""#)]
+    #[regex(r#""[^"]*(\\"[^"]*)*""#, strip_quotes)]
     String(&'src str),
     #[token(",")]
     Comma,
@@ -149,6 +153,11 @@ fn strip_xml_prefix<'src, T: Logos<'src, Source = str>>(logos: &mut Lexer<'src, 
         return &input[1..];
     }
     input
+}
+
+fn strip_quotes<'src, T: Logos<'src, Source = str>>(logos: &mut Lexer<'src, T>) -> &'src str {
+    let mut input = logos.slice();
+    &input[1..input.len() - 1]
 }
 
 #[cfg(test)]

@@ -1,8 +1,11 @@
+use std::collections::VecDeque;
 use crate::lexer::tokens::{IJlToken, XIJContentToken, XIJToken};
 use chumsky::span::SimpleSpan;
 use logos::Logos;
 use std::fmt::Display;
 use std::mem;
+use chumsky::container::Container;
+
 mod tokens;
 
 #[derive(Debug, Copy, Clone, Hash, Ord, PartialOrd, PartialEq, Eq)]
@@ -25,6 +28,7 @@ pub enum Token<'src> {
     Xor,
     Pipe,
     Ampersand,
+    DoubleAmpersand,
     At,
     Hash,
     QuestionMark,
@@ -41,6 +45,7 @@ pub enum Token<'src> {
     Semicolon,
     Colon,
     Asterisk,
+    DoubleAsterisk,
     Tilde,
     Backtick,
     Class,
@@ -67,6 +72,7 @@ impl Display for Token<'_> {
             Token::Ident(v) => v,
             Token::At => "@",
             Token::Ampersand => "&",
+            Token::DoubleAmpersand => "&&",
             Token::Slash => "/",
             Token::Backslash => r"\",
             Token::DollarSign => "$",
@@ -84,6 +90,7 @@ impl Display for Token<'_> {
             Token::AngleBracketOpen => "<",
             Token::AngleBracketClose => ">",
             Token::Asterisk => "*",
+            Token::DoubleAsterisk => "**",
             Token::ExclamationMark => "!",
             Token::QuestionMark => "?",
             Token::Colon => ":",
@@ -112,10 +119,6 @@ impl Display for Token<'_> {
     }
 }
 
-pub struct Lexer<'src, const WITH_SPAN: bool = false> {
-    lexer: IJlLexer<'src>,
-    stack: Vec<LexerType>,
-}
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum LexerType {
@@ -141,7 +144,7 @@ impl<'src> IJlLexer<'src> {
         }
     }
 
-    fn morph_into<T: Logos<'src, Source = str, Extras = ()>>(self) -> logos::Lexer<'src, T> {
+    fn morph_into<T: Logos<'src, Source=str, Extras=()>>(self) -> logos::Lexer<'src, T> {
         match self {
             IJlLexer::IJl(l) => l.morph(),
             IJlLexer::XIJ(l) => l.morph(),
@@ -162,7 +165,29 @@ impl<'src> IJlLexer<'src> {
     }
 }
 
+pub struct Lexer<'src, const WITH_SPAN: bool = false> {
+    lexer: IJlLexer<'src>,
+    stack: Vec<LexerType>,
+    transform_stack: VecDeque<Token<'src>>,
+    last_token: Option<Token<'src>>,
+}
+
 impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
+    pub fn with_logos<L: Logos<'src, Source = str>>(lexer: logos::Lexer<'src, L>) -> Self
+        where (): From<<L as Logos<'src>>::Extras> {
+        Lexer {
+            lexer: IJlLexer::IJl(lexer.morph()),
+            stack: vec![],
+            transform_stack: Default::default(),
+            last_token: None,
+        }
+    }
+
+    #[inline]
+    pub fn new(input: &'src str) -> Self {
+        Self::with_logos(logos::Lexer::<IJlToken<'src>>::new(input))
+    }
+
     pub fn span(&self) -> SimpleSpan {
         match &self.lexer {
             IJlLexer::IJl(l) => l.span(),
@@ -170,9 +195,20 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
             IJlLexer::XIJContent(l) => l.span(),
             IJlLexer::Poisoned => unreachable!(),
         }
-        .into()
+            .into()
     }
+
+    fn last_token_is_before_start_expression(&self) -> bool {
+        let Some(tok) = self.last_token else { return true; };
+
+        !matches!(tok, Token::Ident(_) | Token::ArrayClose | Token::BlockClose | Token::BracketClose)
+    }
+
     pub fn next_token(&mut self) -> Option<Token<'src>> {
+        if let Some(tok) = self.transform_stack.pop_front() {
+            return Some(tok);
+        }
+
         let mut ret = None;
         let lexer = mem::replace(&mut self.lexer, IJlLexer::Poisoned);
 
@@ -183,12 +219,24 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
                     ret = Some(token);
                     match token {
                         Token::XIJFragmentOpen => {
-                            self.stack.push(LexerType::IJl);
-                            IJlLexer::XIJContent(l.morph())
+                            if self.last_token_is_before_start_expression() {
+                                self.stack.push(LexerType::IJl);
+                                IJlLexer::XIJContent(l.morph())
+                            } else {
+                                ret = Some(Token::AngleBracketOpen);
+                                self.transform_stack.push(Token::AngleBracketClose);
+                                IJlLexer::IJl(l)
+                            }
                         }
-                        Token::XIJElementStart(_) => {
-                            self.stack.push(LexerType::IJl);
-                            IJlLexer::XIJ(l.morph())
+                        Token::XIJElementStart(name) => {
+                            if self.last_token_is_before_start_expression() {
+                                self.stack.push(LexerType::IJl);
+                                IJlLexer::XIJ(l.morph())
+                            } else {
+                                ret = Some(Token::AngleBracketOpen);
+                                self.transform_stack.push(Token::Ident(name));
+                                IJlLexer::IJl(l)
+                            }
                         }
                         Token::BlockOpen => {
                             self.stack.push(LexerType::IJl);
@@ -269,13 +317,16 @@ impl<'src, const WITH_SPAN: bool> Lexer<'src, WITH_SPAN> {
             }
         };
 
+        self.last_token = ret;
         ret
     }
 
     pub fn spanned(self) -> Lexer<'src, true> {
         Lexer {
             lexer: self.lexer,
-            stack: vec![],
+            stack: self.stack,
+            transform_stack: self.transform_stack,
+            last_token: self.last_token,
         }
     }
 }
@@ -298,10 +349,7 @@ impl<'src> Iterator for Lexer<'src, false> {
 }
 
 pub fn lexer<'src>(input: &'src str) -> Lexer<'src, false> {
-    Lexer::<false> {
-        lexer: IJlLexer::IJl(IJlToken::lexer(input)),
-        stack: vec![],
-    }
+    Lexer::<false>::new(input)
 }
 
 impl<'src> From<IJlToken<'src>> for Token<'src> {
@@ -352,6 +400,8 @@ impl<'src> From<IJlToken<'src>> for Token<'src> {
             IJlToken::Backtick => Token::Backtick,
             IJlToken::Spread => Token::Spread,
             IJlToken::As => Token::As,
+            IJlToken::DoubleAsterisk => Token::DoubleAsterisk,
+            IJlToken::DoubleAmpersand => Token::DoubleAmpersand,
         }
     }
 }
@@ -464,5 +514,20 @@ mod tests {
         ];
 
         assert_eq!(output, lexer(input).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_transform() {
+        let input_a = "(<>Hello</>)";
+        let input_b = "Hello<>";
+        let input_c = "<>Hello</>";
+
+        let output_a = vec![Token::BracketOpen, Token::XIJFragmentOpen, Token::XIJText("Hello"), Token::XIJFragmentClose, Token::BracketClose];
+        let output_b = vec![Token::Ident("Hello"), Token::AngleBracketOpen, Token::AngleBracketClose];
+        let output_c = vec![Token::XIJFragmentOpen, Token::XIJText("Hello"), Token::XIJFragmentClose];
+
+        assert_eq!(output_a, lexer(input_a).collect::<Vec<_>>());
+        assert_eq!(output_b, lexer(input_b).collect::<Vec<_>>());
+        assert_eq!(output_c, lexer(input_c).collect::<Vec<_>>());
     }
 }

@@ -21,7 +21,7 @@ pub struct TypeName {
     arguments: Vec<Spanned<TypeName>>,
 }
 
-const TYPE_ENCLOSURE: [Token; 2] = [Token::ArrayOpen, Token::ArrayClose];
+const TYPE_ENCLOSURE: [Token; 2] = [Token::AngleBracketOpen, Token::AngleBracketClose];
 
 pub(crate) fn type_name<'tokens, 'src: 'tokens, I>()
 -> impl Parser<'tokens, I, Spanned<TypeName>, extra::Err<Rich<'tokens, Token<'src>>>>
@@ -89,7 +89,7 @@ mod tests {
         let x = type_name().parse(&[Token::Ident("Hello")]).unwrap();
         assert_eq!(x.name.as_str(), "Hello");
 
-        let x = r"[String[]]";
+        let x = r"String<>";
         let tokens = lexer(x).spanned();
         let stream = Stream::from_iter(tokens).map((0..x.len()).into(), |(t, s): (_, _)| (t, s));
         let x = type_name().parse(stream).unwrap();

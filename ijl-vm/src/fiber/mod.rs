@@ -146,75 +146,106 @@ mod tests {
     use crate::fuel::Fuel;
     use crate::opcode::{r, Operation};
     use crate::t::{MetricBox, MetricVec};
-    use crate::{IJlVM, mvec};
+    use crate::{IJlVM, mvec, Value};
     use gc_arena::allocator_api::MetricsAlloc;
     use gc_arena::lock::{GcRefLock, RefLock};
     use gc_arena::{Arena, Gc, Rootable};
     use std::cell::Ref;
+    use crate::callback::Callback;
+
+    #[test]
+    fn test_callback() {
+        let ijlvm = IJlVM::new();
+        ijlvm.enter(|ctx| {
+            Callback::from_fn(&ctx, |ctx, stack| {
+                
+            });
+        });
+    }
+
 
     #[test]
     pub fn test_fibonacci() {
-        let ijlvm = IJlVM::new();
-        ijlvm.enter(|ctx| {
-            let fibonacci = mvec![&ctx;
-                Operation::lte(r(1), r(0), 1),
-                Operation::test(r(1), false),
-                Operation::jmp(2),
-                Operation::load_literal(r(2), 1, 0),
-                Operation::ret(r(2), 1),
-                Operation::eq(r(1), r(0), 2),
-                Operation::test(r(4), false),
-                Operation::jmp(2),
-                Operation::load_literal(r(2), 1, 1),
-                Operation::ret(r(2), 1),
-                Operation::sub(r(2), r(0), 1),
-                Operation::self_call(r(2), 1),
-                Operation::sub(r(3), r(0), 2),
-                Operation::self_call(r(3), 1),
-                Operation::add(r(0), r(2), r(3)),
-                Operation::ret(r(0), 1)
-            ]
-                .into_boxed_slice();
-            let code = CodeBlock {
-                opcodes: fibonacci,
-                functions: mvec![&ctx].into_boxed_slice(),
-                stack_size: 6,
-            };
+        pub fn fibonacci(input: i64) -> i64 {
+            if (input <= 1) {
+                return 0;
+            }
 
-            let prog_2 = mvec![&ctx;
-                Operation::load_function(r(1), 0),
-                Operation::load_literal(r(2), 1, 2),
-                Operation::call(r(1), 1),
-                Operation::ret(r(1), 1)
-            ]
-            .into_boxed_slice();
-            let mut progs = mvec![&ctx; Code(Gc::new(&ctx, code))];
-            let code_2 = CodeBlock {
-                opcodes: prog_2,
-                functions: progs.into_boxed_slice(),
-                stack_size: 3,
-            };
+            if (input == 2) {
+                return 1;
+            }
 
-            let frame = Frame::Start(Code(Gc::new(&ctx, code_2)));
+            fibonacci(input - 1) + fibonacci(input - 2)
+        }
 
-            let mut fiber_state = FiberState {
-                frames: mvec![&ctx; frame],
-                stack: mvec![&ctx],
-            };
+        pub fn vm_fibonacci(fibonacci_input: i32) -> i64 {
+            let ijlvm = IJlVM::new();
+            ijlvm.enter(|ctx| {
+                let fibonacci = mvec![&ctx;
+                    Operation::lte(r(1), r(0), 1),
+                    Operation::test(r(1), false),
+                    Operation::jmp(2),
+                    Operation::load_literal(r(2), 1, 0),
+                    Operation::ret(r(2), 1),
+                    Operation::eq(r(1), r(0), 2),
+                    Operation::test(r(1), false),
+                    Operation::jmp(2),
+                    Operation::load_literal(r(2), 1, 1),
+                    Operation::ret(r(2), 1),
+                    Operation::sub(r(2), r(0), 1),
+                    Operation::self_call(r(2), 1),
+                    Operation::sub(r(3), r(0), 2),
+                    Operation::self_call(r(3), 1),
+                    Operation::add(r(0), r(2), r(3)),
+                    Operation::ret(r(0), 1)
+                ]
+                    .into_boxed_slice();
+                let code = CodeBlock {
+                    opcodes: fibonacci,
+                    functions: mvec![&ctx].into_boxed_slice(),
+                    stack_size: 6,
+                };
 
-            let mut executor_state = ExecutorState {
-                fiber_stack: mvec![&ctx; Fiber(GcRefLock::new(&ctx, RefLock::new(fiber_state)))]
-            };
+                let prog_2 = mvec![&ctx;
+                    Operation::load_function(r(1), 0),
+                    Operation::load_literal(r(2), 1, fibonacci_input),
+                    Operation::call(r(1), 1),
+                    Operation::ret(r(1), 1)
+                ]
+                    .into_boxed_slice();
+                let mut progs = mvec![&ctx; Code(Gc::new(&ctx, code))];
+                let code_2 = CodeBlock {
+                    opcodes: prog_2,
+                    functions: progs.into_boxed_slice(),
+                    stack_size: 3,
+                };
 
-            let ex = Executor(Gc::new(&ctx, RefLock::new(executor_state)));
+                let frame = Frame::Start(Code(Gc::new(&ctx, code_2)));
 
-            ex.run(ctx, &mut Fuel::unlimited()).unwrap();
-            let x = ex.0.unlock(&ctx).borrow().fiber_stack[0]
-                .0
-                .unlock(&ctx)
-                .borrow()
-                .stack[0];
-            println!("{x:?}");
-        });
+                let mut fiber_state = FiberState {
+                    frames: mvec![&ctx; frame],
+                    stack: mvec![&ctx],
+                };
+
+                let mut executor_state = ExecutorState {
+                    fiber_stack: mvec![&ctx; Fiber(GcRefLock::new(&ctx, RefLock::new(fiber_state)))]
+                };
+
+                let ex = Executor(Gc::new(&ctx, RefLock::new(executor_state)));
+
+                ex.run(ctx, &mut Fuel::unlimited()).unwrap();
+                let Value::Int(x) = ex.0.unlock(&ctx).borrow().fiber_stack[0]
+                    .0
+                    .unlock(&ctx)
+                    .borrow()
+                    .stack[0] else { panic!("fibonacci should result in int") };
+
+                x
+            })
+        }
+
+        for i in 0..20 {
+            assert_eq!(fibonacci(i), vm_fibonacci(i as _), "output of vm fibonacci and rust fibonacci mismatch with input {i}");
+        }
     }
 }
